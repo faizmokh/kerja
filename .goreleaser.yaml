@@ -38,10 +38,12 @@ brews:
       owner: faizmokh
       name: homebrew-tap
       branch: main
-    folder: Formula
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    directory: Formula
     commit_author:
-      name: kerja bot
-      email: releases@faizmokh.com
+      name: kerja_bot
+      email: me+bot@faizmokh.com
     commit_msg_template: "chore: release {{ .ProjectName }} {{ .Tag }}"
     homepage: https://github.com/faizmokh/kerja
     description: "Terminal logbook (CLI + TUI) for daily work tracking."
