@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -124,7 +125,12 @@ func newListCommand(ctx context.Context, manager *files.Manager) *cobra.Command 
 }
 
 func newSearchCommand(ctx context.Context, manager *files.Manager) *cobra.Command {
-	var dateFlag string
+	var (
+		dateFlag      string
+		caseSensitive bool
+		outputJSON    bool
+		includeText   bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "search <term>",
@@ -149,27 +155,18 @@ func newSearchCommand(ctx context.Context, manager *files.Manager) *cobra.Comman
 				return err
 			}
 
-			results := filterSectionsByTerm(sections, term)
-			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Results for %q in %s\n", term, startOfMonth.Format("2006-01"))
-			if len(results) == 0 {
-				fmt.Fprintln(out, "(no matches)")
-				return nil
+			results := filterSectionsByTerm(sections, term, caseSensitive, includeText)
+			if outputJSON {
+				return printSearchResultsJSON(cmd, results)
 			}
-
-			for _, res := range results {
-				fmt.Fprintf(out, "%s #%d %s\n",
-					res.section.Date.Format("2006-01-02"),
-					res.index+1,
-					formatEntry(res.entry),
-				)
-			}
-
-			return nil
+			return printSearchResultsText(cmd, term, startOfMonth, results)
 		},
 	}
 
 	cmd.Flags().StringVar(&dateFlag, "date", "", "Reference date in YYYY-MM-DD (default: today)")
+	cmd.Flags().BoolVar(&caseSensitive, "case-sensitive", false, "Match term with case sensitivity")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit results as JSON objects")
+	cmd.Flags().BoolVar(&includeText, "include-text", false, "Include body text when matching tag-only searches")
 
 	return cmd
 }
@@ -192,15 +189,15 @@ type searchResult struct {
 	index   int
 }
 
-func filterSectionsByTerm(sections []logbook.DateSection, term string) []searchResult {
+func filterSectionsByTerm(sections []logbook.DateSection, term string, caseSensitive bool, includeText bool) []searchResult {
 	var results []searchResult
-	needle := strings.ToLower(term)
-	tagNeedle := strings.TrimPrefix(needle, "#")
-	matchTagOnly := strings.HasPrefix(needle, "#")
+	needle := term
+	tagNeedle := strings.TrimPrefix(term, "#")
+	matchTagOnly := strings.HasPrefix(term, "#")
 
 	for _, section := range sections {
 		for idx, entry := range section.Entries {
-			if matchesEntry(entry, needle, tagNeedle, matchTagOnly) {
+			if matchesEntry(entry, needle, tagNeedle, matchTagOnly, caseSensitive, includeText) {
 				results = append(results, searchResult{
 					section: section,
 					entry:   entry,
@@ -213,23 +210,83 @@ func filterSectionsByTerm(sections []logbook.DateSection, term string) []searchR
 	return results
 }
 
-func matchesEntry(entry logbook.Entry, needle, tagNeedle string, tagOnly bool) bool {
-	text := strings.ToLower(entry.Text)
-	if !tagOnly && strings.Contains(text, needle) {
-		return true
+func matchesEntry(entry logbook.Entry, needle, tagNeedle string, tagOnly bool, caseSensitive bool, includeText bool) bool {
+	text := entry.Text
+	textNeedle := needle
+	if tagOnly {
+		textNeedle = tagNeedle
+	}
+
+	if !caseSensitive {
+		text = strings.ToLower(text)
+		needle = strings.ToLower(needle)
+		tagNeedle = strings.ToLower(tagNeedle)
+		textNeedle = strings.ToLower(textNeedle)
+	}
+
+	if tagOnly {
+		if includeText && textNeedle != "" && strings.Contains(text, textNeedle) {
+			return true
+		}
+	} else {
+		if strings.Contains(text, needle) {
+			return true
+		}
 	}
 
 	for _, tag := range entry.Tags {
-		tagLower := strings.ToLower(tag)
+		tagValue := tag
+		if !caseSensitive {
+			tagValue = strings.ToLower(tagValue)
+		}
 		if tagOnly {
-			if tagLower == tagNeedle {
+			if tagValue == tagNeedle {
 				return true
 			}
 			continue
 		}
-		if strings.Contains(tagLower, needle) || tagLower == tagNeedle {
+		if strings.Contains(tagValue, needle) || tagValue == tagNeedle {
 			return true
 		}
 	}
 	return false
+}
+
+func printSearchResultsText(cmd *cobra.Command, term string, start time.Time, results []searchResult) error {
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "Results for %q in %s\n", term, start.Format("2006-01"))
+	if len(results) == 0 {
+		fmt.Fprintln(out, "(no matches)")
+		return nil
+	}
+
+	for _, res := range results {
+		fmt.Fprintf(out, "%s #%d %s\n",
+			res.section.Date.Format("2006-01-02"),
+			res.index+1,
+			formatEntry(res.entry),
+		)
+	}
+	return nil
+}
+
+func printSearchResultsJSON(cmd *cobra.Command, results []searchResult) error {
+	type dto struct {
+		Date  string        `json:"date"`
+		Index int           `json:"index"`
+		Entry logbook.Entry `json:"entry"`
+	}
+
+	list := make([]dto, 0, len(results))
+	for _, res := range results {
+		list = append(list, dto{
+			Date:  res.section.Date.Format("2006-01-02"),
+			Index: res.index + 1,
+			Entry: res.entry,
+		})
+	}
+
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(list)
 }

@@ -18,7 +18,7 @@ func NewRootCommand(ctx context.Context, manager *files.Manager) *cobra.Command 
 		Use:   "kerja",
 		Short: "Track and review daily work logs from your terminal.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m := ui.NewModel(ctx)
+			m := ui.NewModel(ctx, manager)
 			if _, err := tea.NewProgram(m).Run(); err != nil {
 				return fmt.Errorf("run TUI: %w", err)
 			}

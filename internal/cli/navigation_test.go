@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -204,5 +205,143 @@ func TestSearchCommandFindsMatches(t *testing.T) {
 	}
 	if strings.Contains(output, "2025-11-19") {
 		t.Fatalf("output unexpectedly included unmatched entry: %q", output)
+	}
+}
+
+func TestSearchCommandIncludeTextForTagTerm(t *testing.T) {
+	base := t.TempDir()
+	mgr, err := files.NewManager(base)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	writer := logbook.NewWriter(mgr)
+
+	targetDate := time.Date(2025, 11, 12, 0, 0, 0, 0, time.Local)
+	if err := writer.Append(context.Background(), targetDate, logbook.Entry{
+		Status: logbook.StatusDone,
+		Time:   time.Date(2025, 11, 12, 11, 0, 0, 0, time.Local),
+		Text:   "Release checklist ready",
+		Tags:   []string{"shipping"},
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	cmd := newSearchCommand(context.Background(), mgr)
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"#release", "--date", "2025-11-20"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute (no include-text): %v", err)
+	}
+	if !strings.Contains(buf.String(), "(no matches)") {
+		t.Fatalf("expected no matches without include-text, got %q", buf.String())
+	}
+
+	cmd = newSearchCommand(context.Background(), mgr)
+	buf = &bytes.Buffer{}
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"#release", "--date", "2025-11-20", "--include-text"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute (--include-text): %v", err)
+	}
+	if !strings.Contains(buf.String(), "Release checklist ready") {
+		t.Fatalf("expected text match with include-text, got %q", buf.String())
+	}
+}
+
+func TestSearchCommandCaseSensitive(t *testing.T) {
+	base := t.TempDir()
+	mgr, err := files.NewManager(base)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	writer := logbook.NewWriter(mgr)
+
+	date := time.Date(2025, 11, 7, 0, 0, 0, 0, time.Local)
+	if err := writer.Append(context.Background(), date, logbook.Entry{
+		Status: logbook.StatusTodo,
+		Time:   time.Date(2025, 11, 7, 8, 30, 0, 0, time.Local),
+		Text:   "Bug bash prep",
+		Tags:   []string{"QA"},
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	cmd := newSearchCommand(context.Background(), mgr)
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"bug", "--date", "2025-11-20"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute default: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Bug bash prep") {
+		t.Fatalf("expected match without case sensitivity, got %q", buf.String())
+	}
+
+	cmd = newSearchCommand(context.Background(), mgr)
+	buf = &bytes.Buffer{}
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"bug", "--date", "2025-11-20", "--case-sensitive"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute case-sensitive: %v", err)
+	}
+	if !strings.Contains(buf.String(), "(no matches)") {
+		t.Fatalf("expected no matches with case-sensitive search, got %q", buf.String())
+	}
+}
+
+func TestSearchCommandJSONOutput(t *testing.T) {
+	base := t.TempDir()
+	mgr, err := files.NewManager(base)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	writer := logbook.NewWriter(mgr)
+
+	date := time.Date(2025, 11, 5, 0, 0, 0, 0, time.Local)
+	entry := logbook.Entry{
+		Status: logbook.StatusDone,
+		Time:   time.Date(2025, 11, 5, 9, 45, 0, 0, time.Local),
+		Text:   "Review release plan",
+		Tags:   []string{"release"},
+	}
+	if err := writer.Append(context.Background(), date, entry); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	cmd := newSearchCommand(context.Background(), mgr)
+	buf := &bytes.Buffer{}
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"release", "--date", "2025-11-20", "--json"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute json: %v", err)
+	}
+
+	var decoded []struct {
+		Date  string        `json:"date"`
+		Index int           `json:"index"`
+		Entry logbook.Entry `json:"entry"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+		t.Fatalf("Unmarshal json: %v\npayload: %s", err, buf.String())
+	}
+	if len(decoded) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(decoded))
+	}
+	if decoded[0].Date != "2025-11-05" || decoded[0].Index != 1 {
+		t.Fatalf("unexpected metadata: %+v", decoded[0])
+	}
+	if decoded[0].Entry.Text != entry.Text || decoded[0].Entry.Status != entry.Status {
+		t.Fatalf("unexpected entry payload: %+v", decoded[0].Entry)
 	}
 }

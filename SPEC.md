@@ -155,7 +155,7 @@ kerja delete <index> [--date]
 Command details:
 - Flags accept ISO 8601 dates (`YYYY-MM-DD`) and 24h time (`HH:MM`) in the local timezone.
 - `list` defaults to a single day; `--week` maps to `--days=7`. Missing dates in the window are skipped.
-- `search` scans the month anchored by the provided `--date` (default: today). Supplying `#tag` searches tags by exact match.
+- `search` scans the month anchored by the provided `--date` (default: today). Prefix `#tag` to target tag names; add `--include-text` to also scan entry bodies for that tag term, `--case-sensitive` for exact casing, and `--json` to emit structured results.
 - Commands render friendly output like `[todo] 09:15 Draft doc (#docs)`. Empty sections print `(no entries)`.
 
 ----------------------------------------
