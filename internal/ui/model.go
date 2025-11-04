@@ -7,10 +7,48 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	gumstyle "github.com/charmbracelet/gum/style"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/faizmokh/kerja/internal/files"
 	"github.com/faizmokh/kerja/internal/logbook"
+)
+
+const (
+	viewportHorizontalPadding = 4
+	viewportChromeHeight      = 9
+)
+
+var (
+	headerStyle        = gumstyle.Styles{Foreground: "213", Bold: true}.ToLipgloss()
+	loadingStyle       = gumstyle.Styles{Foreground: "111"}.ToLipgloss()
+	statusInfoStyle    = gumstyle.Styles{Foreground: "244"}.ToLipgloss()
+	statusErrorStyle   = gumstyle.Styles{Foreground: "196", Bold: true}.ToLipgloss()
+	labelStyle         = gumstyle.Styles{Foreground: "244", Bold: true}.ToLipgloss()
+	todoBadgeStyle     = gumstyle.Styles{Foreground: "51", Background: "236", Bold: true}.ToLipgloss()
+	doneBadgeStyle     = gumstyle.Styles{Foreground: "120", Background: "236", Bold: true}.ToLipgloss()
+	timeStyle          = gumstyle.Styles{Foreground: "111"}.ToLipgloss()
+	tagStyle           = gumstyle.Styles{Foreground: "177"}.ToLipgloss()
+	placeholderStyle   = gumstyle.Styles{Foreground: "241"}.ToLipgloss()
+	cursorActiveStyle  = gumstyle.Styles{Foreground: "51", Bold: true}.ToLipgloss()
+	cursorPassiveStyle = gumstyle.Styles{Foreground: "238"}.ToLipgloss()
+
+	viewportFrameStyle = lipgloss.NewStyle().
+				BorderStyle(lipgloss.NormalBorder()).
+				BorderForeground(lipgloss.Color("60")).
+				Padding(0, 1)
+	selectedEntryStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("57")).
+				Foreground(lipgloss.Color("230")).
+				Bold(true)
+	entryTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	underlineStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("60"))
 )
 
 // Model owns Bubble Tea state for the main TUI experience.
@@ -34,6 +72,64 @@ type Model struct {
 	loading    bool
 	statusLine string
 	errorLine  string
+
+	viewport      viewport.Model
+	viewportReady bool
+	help          help.Model
+	keys          keyMap
+	textInput     textinput.Model
+	spinner       spinner.Model
+	width         int
+	height        int
+}
+
+type keyMap struct {
+	Up         key.Binding
+	Down       key.Binding
+	PrevDay    key.Binding
+	NextDay    key.Binding
+	Today      key.Binding
+	Reload     key.Binding
+	Toggle     key.Binding
+	AddTodo    key.Binding
+	AddDone    key.Binding
+	Edit       key.Binding
+	EditTime   key.Binding
+	EditStatus key.Binding
+	Delete     key.Binding
+	Quit       key.Binding
+}
+
+func newKeyMap() keyMap {
+	return keyMap{
+		Up:         key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "move up")),
+		Down:       key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "move down")),
+		PrevDay:    key.NewBinding(key.WithKeys("left", "h", "p"), key.WithHelp("←/h/p", "previous day")),
+		NextDay:    key.NewBinding(key.WithKeys("right", "l", "n"), key.WithHelp("→/l/n", "next day")),
+		Today:      key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "jump to today")),
+		Reload:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reload")),
+		Toggle:     key.NewBinding(key.WithKeys("space", "x"), key.WithHelp("space/x", "toggle status")),
+		AddTodo:    key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "add todo")),
+		AddDone:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "add done")),
+		Edit:       key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit entry")),
+		EditTime:   key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "edit time")),
+		EditStatus: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "edit status")),
+		Delete:     key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete entry")),
+		Quit:       key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+	}
+}
+
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Up, k.Down, k.Toggle, k.AddTodo, k.Edit, k.Quit}
+}
+
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Up, k.Down, k.Toggle},
+		{k.AddTodo, k.AddDone, k.Edit, k.EditTime, k.EditStatus},
+		{k.PrevDay, k.NextDay, k.Today, k.Reload},
+		{k.Delete, k.Quit},
+	}
 }
 
 type mode uint8
@@ -89,6 +185,24 @@ func NewModel(ctx context.Context, manager *files.Manager) Model {
 	writer := logbook.NewWriter(manager)
 	initialDate := today()
 
+	vp := viewport.New(0, 0)
+	vp.Style = viewportFrameStyle
+
+	helpModel := help.New()
+	helpModel.ShowAll = true
+
+	input := textinput.New()
+	input.Prompt = cursorPassiveStyle.Render("› ")
+	input.Placeholder = "Describe the entry. Use @HH:MM, !todo|!done, #tags"
+	input.CharLimit = 512
+	input.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	input.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+	spin := spinner.New(
+		spinner.WithSpinner(spinner.Dot),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("63"))),
+	)
+
 	return Model{
 		ctx:         ctx,
 		reader:      reader,
@@ -103,19 +217,33 @@ func NewModel(ctx context.Context, manager *files.Manager) Model {
 		pendingSelectIndex: -1,
 		loading:            true,
 		statusLine:         "Loading today's entries...",
+		viewport:           vp,
+		help:               helpModel,
+		keys:               newKeyMap(),
+		textInput:          input,
+		spinner:            spin,
 	}
 }
 
 // Init loads the initial date section.
 func (m Model) Init() tea.Cmd {
-	return m.loadSectionCmd(m.currentDate)
+	return tea.Batch(
+		func() tea.Msg { return m.spinner.Tick() },
+		m.loadSectionCmd(m.currentDate),
+	)
 }
 
 // Update wires TUI state transitions from user input and async commands.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		return m.handleWindowSize(msg)
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	case sectionLoadedMsg:
 		return m.handleSectionLoaded(msg)
 	case toggleResultMsg:
@@ -131,60 +259,130 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
+func (m Model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	m.width = msg.Width
+	m.height = msg.Height
+
+	width := msg.Width - viewportHorizontalPadding
+	if width < 20 {
+		width = 20
+	}
+
+	height := msg.Height - viewportChromeHeight
+	if height < 5 {
+		height = 5
+	}
+
+	m.viewport.Width = width
+	m.viewport.Height = height
+	m.help.Width = width
+	m.viewportReady = true
+	m = m.scrollSelectionIntoView()
+	return m, nil
+}
+
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.mode != modeNormal {
 		return m.handleInputKey(msg)
 	}
 
-	switch msg.String() {
-	case "ctrl+c", "q":
+	switch {
+	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
-	case "down", "j":
-		if len(m.section.Entries) == 0 {
-			return m, nil
-		}
-		if m.selected < len(m.section.Entries)-1 {
-			m.selected++
-			m.statusLine = fmt.Sprintf("Selected entry %d of %d", m.selected+1, len(m.section.Entries))
-			m.errorLine = ""
-		}
-	case "up", "k":
-		if len(m.section.Entries) == 0 {
-			return m, nil
-		}
-		if m.selected > 0 {
-			m.selected--
-			m.statusLine = fmt.Sprintf("Selected entry %d of %d", m.selected+1, len(m.section.Entries))
-			m.errorLine = ""
-		}
-	case "left", "h", "p":
+	case key.Matches(msg, m.keys.Down):
+		m = m.moveSelection(1)
+		return m, nil
+	case key.Matches(msg, m.keys.Up):
+		m = m.moveSelection(-1)
+		return m, nil
+	case key.Matches(msg, m.keys.PrevDay):
 		return m.gotoDate(m.currentDate.AddDate(0, 0, -1))
-	case "right", "l", "n":
+	case key.Matches(msg, m.keys.NextDay):
 		return m.gotoDate(m.currentDate.AddDate(0, 0, 1))
-	case "t":
+	case key.Matches(msg, m.keys.Today):
 		return m.gotoDate(today())
-	case "r":
+	case key.Matches(msg, m.keys.Reload):
 		return m.reload()
-	case "x", " ":
+	case key.Matches(msg, m.keys.Toggle):
 		if len(m.section.Entries) == 0 || m.loading {
 			return m, nil
 		}
 		return m.toggleSelected()
-	case "a":
+	case key.Matches(msg, m.keys.AddTodo):
 		return m.beginAdd(logbook.StatusTodo)
-	case "A":
+	case key.Matches(msg, m.keys.AddDone):
 		return m.beginAdd(logbook.StatusDone)
-	case "e":
+	case key.Matches(msg, m.keys.Edit):
 		return m.beginEdit()
-	case "T":
+	case key.Matches(msg, m.keys.EditTime):
 		return m.beginEditTime()
-	case "S":
+	case key.Matches(msg, m.keys.EditStatus):
 		return m.beginEditStatus()
-	case "d":
+	case key.Matches(msg, m.keys.Delete):
 		return m.beginDelete()
+	default:
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+}
+
+func (m Model) moveSelection(delta int) Model {
+	if len(m.section.Entries) == 0 {
+		return m
 	}
 
-	return m, nil
+	next := m.selected + delta
+	if next < 0 {
+		next = 0
+	} else if next >= len(m.section.Entries) {
+		next = len(m.section.Entries) - 1
+	}
+
+	if next != m.selected {
+		m.selected = next
+		m.statusLine = fmt.Sprintf("Selected entry %d of %d", m.selected+1, len(m.section.Entries))
+		m.errorLine = ""
+		m = m.scrollSelectionIntoView()
+	}
+
+	return m
+}
+
+func (m Model) scrollSelectionIntoView() Model {
+	if !m.viewportReady || m.viewport.Height <= 0 || len(m.section.Entries) == 0 {
+		return m
+	}
+
+	if m.selected < m.viewport.YOffset {
+		m.viewport.SetYOffset(m.selected)
+	} else if m.selected >= m.viewport.YOffset+m.viewport.Height {
+		m.viewport.SetYOffset(m.selected - m.viewport.Height + 1)
+	}
+
+	return m
+}
+
+func (m Model) focusTextInput(value, placeholder string) (Model, tea.Cmd) {
+	m.inputBuffer = value
+	m.textInput.SetValue(value)
+	if placeholder != "" {
+		m.textInput.Placeholder = placeholder
+	}
+	m.textInput.Prompt = cursorActiveStyle.Render("› ")
+	m.textInput.CursorEnd()
+	cmd := m.textInput.Focus()
+	return m, cmd
+}
+
+func (m Model) resetTextInput() Model {
+	m.textInput.Blur()
+	m.textInput.SetValue("")
+	m.textInput.CursorStart()
+	m.textInput.Placeholder = "Describe the entry. Use @HH:MM, !todo|!done, #tags"
+	m.textInput.CharLimit = 512
+	m.textInput.Prompt = cursorPassiveStyle.Render("› ")
+	return m
 }
 
 func (m Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -192,23 +390,18 @@ func (m Model) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case modeAddTodo, modeAddLog, modeEdit, modeEditTime, modeEditStatus:
 		switch msg.Type {
 		case tea.KeyEnter:
+			m.inputBuffer = m.textInput.Value()
 			return m.submitInput()
 		case tea.KeyEsc:
+			m.textInput.Blur()
 			return m.cancelInput("Cancelled.")
 		case tea.KeyCtrlC:
 			return m, tea.Quit
-		case tea.KeyBackspace, tea.KeyCtrlH:
-			if len(m.inputBuffer) > 0 {
-				m.inputBuffer = trimLastRune(m.inputBuffer)
-			}
-		case tea.KeyCtrlU:
-			m.inputBuffer = ""
-		case tea.KeySpace:
-			m.inputBuffer += " "
-		case tea.KeyRunes:
-			m.inputBuffer += string(msg.Runes)
 		}
-		return m, nil
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		m.inputBuffer = m.textInput.Value()
+		return m, cmd
 	case modeConfirmDelete:
 		switch msg.String() {
 		case "y", "Y":
@@ -232,7 +425,6 @@ func (m Model) beginAdd(status logbook.Status) (tea.Model, tea.Cmd) {
 		m.mode = modeAddLog
 	}
 	m.pendingStatus = status
-	m.inputBuffer = ""
 	if status == logbook.StatusDone {
 		m.inputLabel = "New done entry (text; add @HH:MM, !todo|!done, #tags as needed; Enter to save, Esc to cancel):"
 	} else {
@@ -241,7 +433,9 @@ func (m Model) beginAdd(status logbook.Status) (tea.Model, tea.Cmd) {
 	m.statusLine = ""
 	m.errorLine = ""
 	m.editingIndex = -1
-	return m, nil
+	m.textInput.CharLimit = 512
+	placeholder := "Describe the entry. Use @HH:MM, !todo|!done, #tags"
+	return m.focusTextInput("", placeholder)
 }
 
 func (m Model) beginEdit() (tea.Model, tea.Cmd) {
@@ -258,7 +452,8 @@ func (m Model) beginEdit() (tea.Model, tea.Cmd) {
 	m.inputLabel = fmt.Sprintf("Edit entry %d (adjust text, @HH:MM, !todo|!done, #tags; Enter to save, Esc to cancel):", index+1)
 	m.statusLine = ""
 	m.errorLine = ""
-	return m, nil
+	m.textInput.CharLimit = 512
+	return m.focusTextInput(m.inputBuffer, "Edit entry data.")
 }
 
 func (m Model) beginEditTime() (tea.Model, tea.Cmd) {
@@ -277,7 +472,8 @@ func (m Model) beginEditTime() (tea.Model, tea.Cmd) {
 	m.inputLabel = fmt.Sprintf("Set time for entry %d (HH:MM, Enter to save, Esc to cancel):", m.selected+1)
 	m.statusLine = ""
 	m.errorLine = ""
-	return m, nil
+	m.textInput.CharLimit = 5
+	return m.focusTextInput(m.inputBuffer, "HH:MM")
 }
 
 func (m Model) beginEditStatus() (tea.Model, tea.Cmd) {
@@ -296,7 +492,8 @@ func (m Model) beginEditStatus() (tea.Model, tea.Cmd) {
 	m.inputLabel = fmt.Sprintf("Set status for entry %d (todo|done, Enter to save, Esc to cancel):", m.selected+1)
 	m.statusLine = ""
 	m.errorLine = ""
-	return m, nil
+	m.textInput.CharLimit = 4
+	return m.focusTextInput(m.inputBuffer, "todo|done")
 }
 
 func (m Model) beginDelete() (tea.Model, tea.Cmd) {
@@ -309,6 +506,8 @@ func (m Model) beginDelete() (tea.Model, tea.Cmd) {
 	m.editingIndex = index
 	m.statusLine = ""
 	m.errorLine = ""
+	m.textInput.Blur()
+	m.textInput.Prompt = cursorPassiveStyle.Render("› ")
 	return m, nil
 }
 
@@ -347,6 +546,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		}
 		cmd := m.appendEntryCmd(m.currentDate, entry)
 		m.mode = modeNormal
+		m = m.resetTextInput()
 		m.inputBuffer = ""
 		m.inputLabel = ""
 		m.statusLine = "Saving entry..."
@@ -383,6 +583,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		}
 		cmd := m.editEntryCmd(m.currentDate, m.editingIndex, updated)
 		m.mode = modeNormal
+		m = m.resetTextInput()
 		m.inputBuffer = ""
 		m.inputLabel = ""
 		m.statusLine = "Updating entry..."
@@ -414,6 +615,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		updated.Time = when
 		cmd := m.editEntryCmd(m.currentDate, m.editingIndex, updated)
 		m.mode = modeNormal
+		m = m.resetTextInput()
 		m.inputBuffer = ""
 		m.inputLabel = ""
 		m.statusLine = "Updated time."
@@ -443,6 +645,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		entry := m.section.Entries[m.editingIndex]
 		if entry.Status == status {
 			m.mode = modeNormal
+			m = m.resetTextInput()
 			m.inputBuffer = ""
 			m.inputLabel = ""
 			m.statusLine = "Status unchanged."
@@ -455,6 +658,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 		updated.Status = status
 		cmd := m.editEntryCmd(m.currentDate, m.editingIndex, updated)
 		m.mode = modeNormal
+		m = m.resetTextInput()
 		m.inputBuffer = ""
 		m.inputLabel = ""
 		m.statusLine = "Updated status."
@@ -469,6 +673,7 @@ func (m Model) submitInput() (tea.Model, tea.Cmd) {
 
 func (m Model) cancelInput(message string) (tea.Model, tea.Cmd) {
 	m.mode = modeNormal
+	m = m.resetTextInput()
 	m.inputBuffer = ""
 	m.inputLabel = ""
 	m.pendingStatus = logbook.StatusTodo
@@ -497,14 +702,6 @@ func (m Model) confirmDelete() (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func trimLastRune(input string) string {
-	if input == "" {
-		return input
-	}
-	runes := []rune(input)
-	return string(runes[:len(runes)-1])
-}
-
 func (m Model) handleSectionLoaded(msg sectionLoadedMsg) (tea.Model, tea.Cmd) {
 	// Ignore stale results for dates we no longer display.
 	if !sameDay(m.currentDate, msg.date) {
@@ -526,6 +723,7 @@ func (m Model) handleSectionLoaded(msg sectionLoadedMsg) (tea.Model, tea.Cmd) {
 	if len(m.section.Entries) == 0 {
 		m.selected = 0
 		m.statusLine = fmt.Sprintf("%s has no entries.", msg.date.Format("2006-01-02"))
+		m.viewport.SetYOffset(0)
 	} else {
 		if m.shouldSelectLast {
 			m.selected = len(m.section.Entries) - 1
@@ -542,6 +740,7 @@ func (m Model) handleSectionLoaded(msg sectionLoadedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.shouldSelectLast = false
 	m.pendingSelectIndex = -1
+	m = m.scrollSelectionIntoView()
 	return m, nil
 }
 
@@ -616,11 +815,13 @@ func (m Model) gotoDate(date time.Time) (tea.Model, tea.Cmd) {
 	m.statusLine = fmt.Sprintf("Loading %s...", date.Format("2006-01-02"))
 	m.errorLine = ""
 	m.mode = modeNormal
+	m = m.resetTextInput()
 	m.inputBuffer = ""
 	m.inputLabel = ""
 	m.editingIndex = -1
 	m.pendingSelectIndex = -1
 	m.shouldSelectLast = false
+	m.viewport.SetYOffset(0)
 	return m, m.loadSectionCmd(date)
 }
 
@@ -709,62 +910,109 @@ func (m Model) deleteEntryCmd(date time.Time, index int) tea.Cmd {
 
 // View renders the frame.
 func (m Model) View() string {
-	var b strings.Builder
+	headerText := m.currentDate.Format("Monday, 02 January 2006")
+	header := lipgloss.JoinVertical(
+		lipgloss.Left,
+		headerStyle.Render(headerText),
+		underlineStyle.Render(strings.Repeat("─", lipgloss.Width(headerText))),
+	)
 
-	header := m.currentDate.Format("Monday, 02 January 2006")
-	b.WriteString(header)
-	b.WriteByte('\n')
-	b.WriteString(strings.Repeat("-", len(header)))
-	b.WriteString("\n\n")
-
+	var listView string
 	if m.loading {
-		b.WriteString("Loading...\n")
-	} else if len(m.section.Entries) == 0 {
-		b.WriteString("(no entries)\n")
+		loading := strings.TrimSpace(fmt.Sprintf("%s %s", m.spinner.View(), loadingStyle.Render("Loading entries...")))
+		listView = viewportFrameStyle.Render(loading)
 	} else {
-		for i, entry := range m.section.Entries {
-			cursor := " "
-			if i == m.selected {
-				cursor = ">"
-			}
-			b.WriteString(cursor)
-			b.WriteByte(' ')
-			b.WriteString(formatEntry(entry))
-			b.WriteByte('\n')
+		content := m.renderEntries()
+		if strings.TrimSpace(content) == "" {
+			content = placeholderStyle.Render("(no entries yet)")
 		}
+		m.viewport.SetContent(content)
+		listView = m.viewport.View()
 	}
 
+	var status string
 	if m.errorLine != "" {
-		b.WriteString("\n! ")
-		b.WriteString(m.errorLine)
-		b.WriteByte('\n')
+		status = statusErrorStyle.Render("! " + m.errorLine)
 	} else if m.statusLine != "" {
-		b.WriteString("\n")
-		b.WriteString(m.statusLine)
-		b.WriteByte('\n')
+		status = statusInfoStyle.Render(m.statusLine)
 	}
 
+	var input string
 	switch m.mode {
-	case modeAddTodo, modeAddLog, modeEdit:
-		b.WriteString("\n")
-		b.WriteString(m.inputLabel)
-		b.WriteByte('\n')
-		b.WriteString("> ")
-		b.WriteString(m.inputBuffer)
-		b.WriteByte('\n')
+	case modeAddTodo, modeAddLog, modeEdit, modeEditTime, modeEditStatus:
+		label := labelStyle.Render(m.inputLabel)
+		input = lipgloss.JoinVertical(lipgloss.Left, label, m.textInput.View())
 	case modeConfirmDelete:
-		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("Delete entry %d? (y/n, Esc to cancel)", m.editingIndex+1))
-		b.WriteByte('\n')
+		prompt := fmt.Sprintf("Delete entry %d? (y/n, Esc to cancel)", m.editingIndex+1)
+		input = labelStyle.Render(prompt)
 	}
 
-	b.WriteString("\n")
-	b.WriteString("Navigation: <-/h/p prev  ->/l/n next  j/k select  t today  r reload")
-	b.WriteByte('\n')
-	b.WriteString("Actions: space/x toggle  a add todo  A add done  e edit  T set time  S set status  d delete  q quit")
-	b.WriteByte('\n')
+	sections := []string{header, ""}
+	if listView != "" {
+		sections = append(sections, listView)
+	}
+	if status != "" {
+		sections = append(sections, status)
+	}
+	if input != "" {
+		sections = append(sections, input)
+	}
+	sections = append(sections, m.help.View(m.keys))
 
-	return b.String()
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (m Model) renderEntries() string {
+	if len(m.section.Entries) == 0 {
+		return ""
+	}
+
+	lines := make([]string, len(m.section.Entries))
+	for i, entry := range m.section.Entries {
+		lines[i] = m.renderEntry(entry, i)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) renderEntry(entry logbook.Entry, index int) string {
+	cursor := cursorPassiveStyle.Render(" ")
+	if index == m.selected {
+		cursor = cursorActiveStyle.Render("›")
+	}
+
+	statusBadge := todoBadgeStyle.Render(" TODO ")
+	if entry.Status == logbook.StatusDone {
+		statusBadge = doneBadgeStyle.Render(" DONE ")
+	}
+
+	timeText := "--:--"
+	if !entry.Time.IsZero() {
+		timeText = entry.Time.Format("15:04")
+	}
+	timeSegment := timeStyle.Render(timeText)
+
+	text := strings.TrimSpace(entry.Text)
+	if text == "" {
+		text = "(no description)"
+	}
+	textSegment := entryTextStyle.Render(text)
+
+	tagSegments := make([]string, len(entry.Tags))
+	for i, tag := range entry.Tags {
+		tagSegments[i] = tagStyle.Render("#" + tag)
+	}
+
+	contentParts := []string{statusBadge, timeSegment, textSegment}
+	if len(tagSegments) > 0 {
+		contentParts = append(contentParts, strings.Join(tagSegments, " "))
+	}
+
+	content := strings.Join(contentParts, " ")
+	if index == m.selected {
+		content = selectedEntryStyle.Render(content)
+	}
+
+	return fmt.Sprintf("%s %s", cursor, content)
 }
 
 func today() time.Time {
@@ -781,37 +1029,6 @@ func plural(count int) string {
 		return "y"
 	}
 	return "ies"
-}
-
-func formatEntry(entry logbook.Entry) string {
-	status := "todo"
-	if entry.Status == logbook.StatusDone {
-		status = "done"
-	}
-
-	var builder strings.Builder
-	builder.Grow(32 + len(entry.Text) + len(entry.Tags)*6)
-
-	fmt.Fprintf(&builder, "[%s] [%s]", status, entry.Time.Format("15:04"))
-
-	if entry.Text != "" {
-		builder.WriteByte(' ')
-		builder.WriteString(entry.Text)
-	}
-
-	if len(entry.Tags) > 0 {
-		builder.WriteString(" (")
-		for i, tag := range entry.Tags {
-			if i > 0 {
-				builder.WriteString(", ")
-			}
-			builder.WriteByte('#')
-			builder.WriteString(tag)
-		}
-		builder.WriteByte(')')
-	}
-
-	return builder.String()
 }
 
 func entryToInput(entry logbook.Entry) string {
