@@ -10,13 +10,15 @@ import (
 
 	"github.com/faizmokh/kerja/internal/files"
 	"github.com/faizmokh/kerja/internal/ui"
+	"github.com/faizmokh/kerja/internal/version"
 )
 
 // NewRootCommand creates the top-level Cobra command to host subcommands and TUI launcher.
 func NewRootCommand(ctx context.Context, manager *files.Manager) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "kerja",
-		Short: "Track and review daily work logs from your terminal.",
+		Use:     "kerja",
+		Short:   "Track and review daily work logs from your terminal.",
+		Version: version.Info(),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			m := ui.NewModel(ctx, manager)
 			if _, err := tea.NewProgram(m).Run(); err != nil {

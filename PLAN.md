@@ -30,7 +30,9 @@
 19. Provide export subcommand (`kerja export --format=json|csv`) leveraging parser outputs.
 
 ## 6. Packaging & Distribution
-20. Integrate CI (GitHub Actions) running `go test ./...`, linters (`golangci-lint`).  
-21. Build release pipeline producing binaries for macOS/Linux and generating checksums.  
-22. Publish Homebrew tap formula with version bump automation.  
-23. Document installation, commands, and contribution flow in README/AGENTS.
+20. Embed semantic version + commit metadata in the binary (e.g. `internal/version`) so releases surface `kerja --version`.  
+21. Introduce a `goreleaser` config that cross-compiles macOS (arm64/amd64) and Linux binaries, wraps them in archives, and emits checksums/signatures.  
+22. Add a GitHub Actions release workflow (triggered by tags) that runs tests, `goreleaser release`, and uploads all artifacts.  
+23. Wire `goreleaser`'s Homebrew pipeline against the existing `faizmokh/homebrew-tap` repo, templating `Formula/kerja.rb` and handling version bumps + bottle uploads automatically.  
+24. Smoke-test the tap locally (`brew tap faizmokh/tap`, `brew install kerja`) and gate the workflow with `brew test` / `brew audit --strict`.  
+25. Expand docs with release steps, token requirements for automation, and Homebrew installation instructions (README + AGENTS).

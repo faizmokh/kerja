@@ -17,3 +17,9 @@ Write table-driven tests whenever feasible and keep assertions minimal but descr
 
 ## Commit & Pull Request Guidelines
 Commits should stay small, in the imperative mood (“Add task scheduler”). Use the body to capture rationale or migration notes, mirroring the concise history already in use. Each PR must include: a summary of changes, linked issue or task ID, testing evidence (`go test ./...` output is sufficient), and screenshots or curl transcripts for observable endpoints. Request review once CI is green and respond promptly to feedback.
+
+## Release & Distribution
+- Releases are driven by GoReleaser using `.goreleaser.yaml`; it cross-compiles macOS (arm64/amd64) and Linux binaries, emits archives + checksums, and updates the Homebrew formula.
+- Tag the repository with `vX.Y.Z` to trigger the `release` GitHub Actions workflow. It runs tests, invokes GoReleaser, and publishes GitHub Releases.
+- Provide a personal access token with push rights to `faizmokh/homebrew-tap` as the `HOMEBREW_TAP_GITHUB_TOKEN` secret so the formula bump succeeds.
+- After a release, smoke-test the tap locally (`brew tap faizmokh/tap && brew install kerja`) and confirm `kerja --version` reports the new tag + commit.

@@ -6,10 +6,21 @@ kerja is a Go-based terminal application (Bubble Tea TUI + Cobra CLI) for captur
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew tap faizmokh/tap
+brew install kerja
+```
+
+### From Source
+
 ```bash
 go build ./cmd/kerja
 ./cmd/kerja/kerja --help
 ```
+
+Check your binary metadata with `kerja --version`.
 
 By default the app stores Markdown under `~/.kerja/YYYY/YYYY-MM.md`. Override the root with `KERJA_HOME` (for example `export KERJA_HOME=~/worklogs`).
 
@@ -80,3 +91,13 @@ Sections that do not exist yet render as `(no entries)` so you can see what stil
 | TUI dev loop | `go run ./cmd/kerja` |
 
 `internal/cli/integration_test.go` exercises the CLI end-to-end (append → list → search → edit → delete) against temp logbooks so regressions surface early. The codebase follows conventional Go layouts (`cmd/`, `internal/`); see `SPEC.md` for the Markdown schema and write rules.
+
+---
+
+## Release Process
+
+1. Ensure the main branch is green and `go test ./...` passes locally.
+2. Export a GitHub token with permission to push to `faizmokh/homebrew-tap` (configure it as `HOMEBREW_TAP_GITHUB_TOKEN` in repository secrets).
+3. Tag the commit using semantic versioning (for example `git tag v0.4.0 && git push origin v0.4.0`).
+4. GitHub Actions runs GoReleaser to create archives, checksums, and update the Homebrew tap formula.
+5. Verify the release by installing from Homebrew (`brew tap faizmokh/tap && brew install kerja`) and running `kerja --version`.

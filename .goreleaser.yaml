@@ -1,0 +1,58 @@
+project_name: kerja
+
+before:
+  hooks:
+    - go test ./...
+
+builds:
+  - id: kerja
+    main: ./cmd/kerja
+    binary: kerja
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/faizmokh/kerja/internal/version.Version={{.Version}}
+      - -X github.com/faizmokh/kerja/internal/version.Commit={{.FullCommit}}
+      - -X github.com/faizmokh/kerja/internal/version.Date={{.Date}}
+
+archives:
+  - id: kerja-archives
+    builds:
+      - kerja
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "{{ .ProjectName }}_checksums.txt"
+
+brews:
+  - name: kerja
+    repository:
+      owner: faizmokh
+      name: homebrew-tap
+      branch: main
+    folder: Formula
+    commit_author:
+      name: kerja bot
+      email: releases@faizmokh.com
+    commit_msg_template: "chore: release {{ .ProjectName }} {{ .Tag }}"
+    homepage: https://github.com/faizmokh/kerja
+    description: "Terminal logbook (CLI + TUI) for daily work tracking."
+    install: |
+      bin.install "kerja"
+    test: |
+      system "#{bin}/kerja", "--version"
+
+changelog:
+  use: git
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
