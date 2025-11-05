@@ -1,8 +1,17 @@
 # kerja
 
-kerja is a Go-based terminal application (Bubble Tea TUI + Cobra CLI) for capturing and reviewing daily work logs persisted as Markdown. Storage behavior is defined in `SPEC.md`.
+kerja is a Go-based terminal companion for capturing, reviewing, and searching daily work logs. It ships both a Bubble Tea TUI and a Cobra-powered CLI, storing every entry as plain Markdown so your notes stay portable and version-control friendly.
 
----
+## Features
+- Capture todo/done entries from a keyboard-driven TUI or scriptable CLI.
+- Persist monthly logs as Markdown that diff cleanly and are easy to sync.
+- Jump across days, list rolling windows, and search by keyword or tag.
+- Share a single storage engine between the CLI and TUI to keep workflows unified.
+- Ship cross-platform binaries via Homebrew or `go build`.
+
+## Requirements
+- Go 1.25 or newer when building from source.
+- macOS or Linux terminal; Windows works via WSL.
 
 ## Installation
 
@@ -16,19 +25,34 @@ brew install kerja
 ### From Source
 
 ```bash
+go install github.com/faizmokh/kerja/cmd/kerja@latest
+kerja --help
+```
+
+To build locally without touching `GOBIN`:
+
+```bash
 go build ./cmd/kerja
 ./cmd/kerja/kerja --help
 ```
 
-Check your binary metadata with `kerja --version`.
+Check metadata with `kerja --version`.
 
-By default the app stores Markdown under `~/.kerja/YYYY/YYYY-MM.md`. Override the root with `KERJA_HOME` (for example `export KERJA_HOME=~/worklogs`).
+## Quick Start
 
----
+```bash
+kerja todo "Write integration tests" #testing
+kerja log --time 09:15 "Review design doc" #review
+kerja list --week
+```
 
-## CLI Overview
+The default log location is `~/.kerja/<year>/<year-month>.md`. Set `KERJA_HOME` to point at a different root (for example `export KERJA_HOME=~/worklogs`).
 
-The CLI mirrors the TUI data model so commands can script the same workflows the UI exposes.
+Launch the TUI by running `kerja` with no arguments. It opens today's section and keeps the file in sync as you add, edit, toggle, or delete entries.
+
+## CLI Commands
+
+The CLI mirrors the TUI data model so you can automate the same workflows.
 
 | Command | Purpose | Key Flags |
 |---------|---------|-----------|
@@ -43,9 +67,7 @@ The CLI mirrors the TUI data model so commands can script the same workflows the
 | `kerja edit <index> [text ... #tags]` | Update text/tags/time/status | `--date`, `--time`, `--status` |
 | `kerja delete <index>` | Remove an entry | `--date` |
 
-All timestamps are interpreted in the current locale unless otherwise noted. For search, prefix a term with `#` to match tags exactly; add `--include-text` to also scan entry bodies when using tag-prefixed queries. `--json` emits results suitable for piping into other tools.
-
----
+Timestamps use your local timezone. For search, prefix a term with `#` to match tags exactly; add `--include-text` to also scan entry bodies. `--json` emits results you can pipe into other tools.
 
 ## Example Workflow
 
@@ -59,9 +81,7 @@ kerja edit 2 "Review design doc updates" --status done
 kerja delete 3
 ```
 
-This sequence appends todo + done entries, lists the past week, searches for “bug”, toggles completion, edits an entry (including status change), and finally deletes an entry.
-
----
+This sequence appends todo + done entries, lists the past week, searches for "bug", toggles completion, edits an entry (including status change), and finally deletes an entry.
 
 ## TUI
 
@@ -76,11 +96,25 @@ Running `kerja` with no subcommand boots the Bubble Tea interface. The model loa
 - `Esc` cancels any in-progress dialog
 - `q` or `Ctrl+C` exits the program
 
-Entry prompts accept the same tokens as the CLI helpers: add `@HH:MM` to set the timestamp, `!todo`/`!done` to choose status, and `#tag` for labels.
+Entry prompts accept the same tokens as the CLI helpers: add `@HH:MM` to set the timestamp, `!todo`/`!done` to choose status, and `#tag` for labels. Sections that do not exist yet render as `(no entries)` so you can see what still needs logging. The TUI shares the same reader and writer as the CLI, so changes are written to the Markdown log immediately.
 
-Sections that do not exist yet render as `(no entries)` so you can see what still needs logging. The TUI shares the same reader and writer as the CLI, so changes are written to the Markdown log immediately.
+## Data & Storage Format
 
----
+- Logs live under `~/.kerja/` by default, grouped `/year/year-month.md`.
+- Each file contains a `# {Month Name} {Year}` heading and daily `## YYYY-MM-DD` sections.
+- Entries take the form `- [ ] [HH:MM] Task text #tag1 #tag2` (`[x]` marks done).
+- Parser and writer rules are documented in `SPEC.md`; refer there for edge cases and write guarantees.
+
+This structure keeps files human-friendly while enabling reliable parsing for both the CLI and TUI layers.
+
+## Project Layout
+
+- `cmd/kerja`: application entrypoint wiring Cobra/TUI bootstrap.
+- `internal/cli`: command implementations and integration tests.
+- `internal/files`: filesystem helpers, including `KERJA_HOME` overrides.
+- `internal/logbook`: Markdown parser, reader, and writer.
+- `internal/ui`: Bubble Tea models for the interactive interface.
+- `internal/version`: runtime version metadata surfaced via `kerja --version`.
 
 ## Development
 
@@ -90,9 +124,7 @@ Sections that do not exist yet render as `(no entries)` so you can see what stil
 | Lint/format | `go fmt ./... && go vet ./...` |
 | TUI dev loop | `go run ./cmd/kerja` |
 
-`internal/cli/integration_test.go` exercises the CLI end-to-end (append → list → search → edit → delete) against temp logbooks so regressions surface early. The codebase follows conventional Go layouts (`cmd/`, `internal/`); see `SPEC.md` for the Markdown schema and write rules.
-
----
+`internal/cli/integration_test.go` exercises the CLI end-to-end (append → list → search → edit → delete) against temporary logbooks so regressions surface early. Run `go test -cover ./...` locally to keep coverage steady.
 
 ## Release Process
 
