@@ -910,7 +910,12 @@ func (m Model) deleteEntryCmd(date time.Time, index int) tea.Cmd {
 
 // View renders the frame.
 func (m Model) View() string {
-	headerText := m.currentDate.Format("Monday, 02 January 2006")
+	var headerText string
+	if sameDay(m.currentDate, today()) {
+		headerText = m.currentDate.Format("Monday, 02 January 2006") + " (Today)"
+	} else {
+		headerText = m.currentDate.Format("Monday, 02 January 2006")
+	}
 	header := lipgloss.JoinVertical(
 		lipgloss.Left,
 		headerStyle.Render(headerText),
